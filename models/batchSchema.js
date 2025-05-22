@@ -20,7 +20,7 @@ const batchSchema = new mongoose.Schema(
       required: true,
     },
     location: {
-      type: String, // Or an object with address details if needed
+      type: String,
       required: true,
     },
     subject: {
@@ -28,7 +28,7 @@ const batchSchema = new mongoose.Schema(
       required: true,
     },
     duration: {
-      type: String, // e.g., "2 weeks", "3 hours"
+      type: String,
       required: true,
     },
     startDate: {
@@ -40,13 +40,13 @@ const batchSchema = new mongoose.Schema(
       required: true,
     },
     time: {
-      type: String, // e.g., "9:00 AM - 12:00 PM"
+      type: String,
       required: true,
     },
     teacher: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "teacher",
-      required: true,
+      required: false, // Changed to optional
     },
     students: [
       {

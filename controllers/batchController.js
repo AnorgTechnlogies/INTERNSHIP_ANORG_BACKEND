@@ -2,8 +2,42 @@ const Batch = require('../models/batchSchema.js');
 const Intern = require('../models/internSchema.js');
 const Teacher = require('../models/teacherSchema.js');
 
+// Create a new batch
 const batchCreate = async (req, res) => {
+    console.log("Request body:", req.body);
     try {
+        // Validate required fields
+        const requiredFields = [
+            "batchName",
+            "scheduleTitle",
+            "modeOfBatch",
+            "sequenceNumber",
+            "location",
+            "subject",
+            "duration",
+            "startDate",
+            "endDate",
+            "time",
+        ];
+        for (const field of requiredFields) {
+            if (!req.body[field]) {
+                return res.status(400).json({ message: `Missing required field: ${field}` });
+            }
+        }
+
+        // Check for existing batch with same name and sequence number
+        const existingBatchByName = await Batch.findOne({
+            batchName: req.body.batchName,
+            sequenceNumber: req.body.sequenceNumber,
+        });
+
+        if (existingBatchByName) {
+            return res.status(400).json({
+                message: "Sorry, this batch name with the same sequence number already exists",
+            });
+        }
+
+        // Create new batch
         const batch = new Batch({
             batchName: req.body.batchName,
             scheduleTitle: req.body.scheduleTitle,
@@ -12,28 +46,24 @@ const batchCreate = async (req, res) => {
             location: req.body.location,
             subject: req.body.subject,
             duration: req.body.duration,
-            startDate: req.body.startDate,
-            endDate: req.body.endDate,
+            startDate: new Date(req.body.startDate),
+            endDate: new Date(req.body.endDate),
             time: req.body.time,
-            teacher: req.body.teacher,
             description: req.body.description,
-            status: req.body.status || "Upcoming"
+            // teacher: Not included since it's optional
+            // students: Defaults to empty array
+            // status: Defaults to "Upcoming"
         });
 
-        const existingBatchByName = await Batch.findOne({
-            batchName: req.body.batchName,
-            sequenceNumber: req.body.sequenceNumber
-        });
-
-        if (existingBatchByName) {
-            res.send({ message: 'Sorry this batch name with the same sequence number already exists' });
-        }
-        else {
-            const result = await batch.save();
-            res.send(result);
-        }
+        const result = await batch.save();
+        res.status(201).json(result);
     } catch (err) {
-        res.status(500).json(err);
+        console.error("Error creating batch:", err);
+        res.status(500).json({
+            message: "Server error",
+            error: err.message,
+            stack: err.stack, // Include stack trace for debugging
+        });
     }
 };
 

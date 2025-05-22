@@ -4,31 +4,54 @@ const Batch = require('../models/batchSchema.js');
 const Intern = require('../models/internSchema.js');
 
 const teacherRegister = async (req, res) => {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, batchId } = req.body;
+
     try {
+        // Validate required fields
+        if (!name || !email || !password) {
+            return res.status(400).json({ message: 'Name, email, and password are required' });
+        }
+
+        // Check if email already exists
+        const existingTeacherByEmail = await Teacher.findOne({ email });
+        if (existingTeacherByEmail) {
+            return res.status(400).json({ message: 'Email already exists' });
+        }
+
+        // Hash password
         const salt = await bcrypt.genSalt(10);
         const hashedPass = await bcrypt.hash(password, salt);
 
-        const teacher = new Teacher({ 
-            name, 
-            email, 
-            password: hashedPass, 
-            role: role || "Teacher",
-            teachBatches: []
+        // Create new teacher
+        const teacher = new Teacher({
+            name,
+            email,
+            password: hashedPass,
+            role: role || 'Teacher',
+            teachBatches: batchId ? [batchId] : []
         });
 
-        const existingTeacherByEmail = await Teacher.findOne({ email });
+        // Save teacher
+        const savedTeacher = await teacher.save();
 
-        if (existingTeacherByEmail) {
-            res.send({ message: 'Email already exists' });
+        // If batchId is provided, update the batch's teacher field
+        if (batchId) {
+            const batch = await Batch.findById(batchId);
+            if (!batch) {
+                return res.status(404).json({ message: 'Batch not found' });
+            }
+            batch.teacher = savedTeacher._id;
+            await batch.save();
         }
-        else {
-            let result = await teacher.save();
-            result.password = undefined;
-            res.send(result);
-        }
+
+        // Remove password from response
+        const teacherResponse = savedTeacher.toObject();
+        delete teacherResponse.password;
+
+        res.status(201).json(teacherResponse);
     } catch (err) {
-        res.status(500).json(err);
+        console.error(err);
+        res.status(500).json({ message: 'Server error' });
     }
 };
 

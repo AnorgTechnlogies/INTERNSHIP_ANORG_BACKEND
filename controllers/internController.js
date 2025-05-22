@@ -1,7 +1,6 @@
 const bcrypt = require('bcrypt');
 const Intern = require('../models/internSchema.js');
 const Batch = require('../models/batchSchema.js');
-
 const internRegister = async (req, res) => {
     try {
         const salt = await bcrypt.genSalt(10);
@@ -13,9 +12,7 @@ const internRegister = async (req, res) => {
 
         if (existingIntern) {
             res.send({ message: 'Email already exists' });
-        }
-        else {
-            // Create batchIds array from the request if present, otherwise empty array
+        } else {
             const batchIds = req.body.batches || [];
             
             const intern = new Intern({
@@ -27,7 +24,6 @@ const internRegister = async (req, res) => {
 
             let result = await intern.save();
 
-            // If batches were specified, update each batch to include this intern
             if (batchIds.length > 0) {
                 await Batch.updateMany(
                     { _id: { $in: batchIds } },
@@ -42,6 +38,7 @@ const internRegister = async (req, res) => {
         res.status(500).json(err);
     }
 };
+
 
 const internLogIn = async (req, res) => {
     try {

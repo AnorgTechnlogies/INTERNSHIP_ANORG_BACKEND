@@ -19,7 +19,6 @@ const internSchema = new mongoose.Schema(
       type: String,
       default: "Intern",
     },
-    // Intern may be assigned to one or multiple batches
     batches: [
       {
         type: mongoose.Schema.Types.ObjectId,

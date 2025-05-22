@@ -84,15 +84,65 @@ const getAdminDetail = async (req, res) => {
 
 const bulkInternRegister = async (req, res) => {
     try {
+        // Validate inputs
         const { batchId } = req.body;
         const file = req.file;
-        
+
+        // Log file details
+        console.log('File received:', {
+            originalname: file?.originalname,
+            mimetype: file?.mimetype,
+            bufferExists: !!file?.buffer,
+            bufferSize: file?.buffer?.length,
+            fieldname: file?.fieldname,
+            fileExists: !!file
+        });
+
         if (!file) {
             return res.status(400).json({ message: 'No file uploaded' });
         }
-        
+
         if (!batchId) {
             return res.status(400).json({ message: 'Batch ID is required' });
+        }
+
+        // Validate file type and extension
+        const validMimeTypes = [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel'
+        ];
+        const validExtensions = ['.xlsx', '.xls'];
+        const fileExtension = file.originalname.toLowerCase().slice(-5);
+        if (!validMimeTypes.includes(file.mimetype) || !validExtensions.some(ext => fileExtension.endsWith(ext))) {
+            return res.status(400).json({ 
+                message: `Invalid file type: ${file.originalname}. Only .xlsx or .xls files are allowed` 
+            });
+        }
+
+        // Check buffer
+        if (!file.buffer) {
+            return res.status(400).json({ 
+                message: `Invalid file: ${file.originalname}. File buffer is missing, check server upload configuration` 
+            });
+        }
+        if (file.buffer.length === 0) {
+            return res.status(400).json({ 
+                message: `Invalid file: ${file.originalname}. File is empty` 
+            });
+        }
+
+        // Log successful buffer receipt
+        console.log(`Buffer received for ${file.originalname}: ${file.buffer.length} bytes`);
+
+        // Validate batch ID
+        let batch;
+        try {
+            batch = await Batch.findById(batchId);
+            if (!batch) {
+                return res.status(404).json({ message: 'Batch not found' });
+            }
+        } catch (err) {
+            return res.status(400).json({ message: 'Invalid Batch ID format' });
         }
 
         // Parse Excel file
@@ -100,97 +150,119 @@ const bulkInternRegister = async (req, res) => {
         try {
             workbook = XLSX.read(file.buffer, { type: 'buffer' });
         } catch (err) {
-            return res.status(400).json({ message: 'Invalid Excel file format' });
+            return res.status(400).json({ 
+                message: `Invalid Excel file format: Unable to read file: ${file.originalname}`, 
+                details: err.message 
+            });
         }
-        
+
         if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
-            return res.status(400).json({ message: 'Excel file contains no sheets' });
+            return res.status(400).json({ message: `Excel file contains no sheets: ${file.originalname}` });
         }
-        
+
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const data = XLSX.utils.sheet_to_json(sheet);
-        
-        if (!data || data.length === 0) {
-            return res.status(400).json({ message: 'Excel file contains no data' });
-        }
-
-        // Validate batch
+        let data;
         try {
-            const batch = await Batch.findById(batchId);
-            
-            if (!batch) {
-                return res.status(404).json({ message: 'Batch not found' });
+            data = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            if (!data || data.length === 0) {
+                return res.status(400).json({ message: `Excel file contains no data: ${file.originalname}` });
             }
         } catch (err) {
-            return res.status(400).json({ message: 'Invalid Batch ID' });
+            return res.status(400).json({ 
+                message: `Invalid Excel file format: Unable to parse sheet: ${file.originalname}`, 
+                details: err.message 
+            });
         }
 
-        const registeredInterns = [];
+        // Process header and data
+        const headers = data[0].map(h => String(h).toLowerCase().trim());
+        const expectedHeaders = ['name', 'email', 'password'];
+        const missingHeaders = expectedHeaders.filter(h => !headers.includes(h));
+        if (missingHeaders.length > 0) {
+            return res.status(400).json({ 
+                message: `Missing required columns in ${file.originalname}: ${missingHeaders.join(', ')}`
+            });
+        }
+
+        const nameIdx = headers.indexOf('name');
+        const emailIdx = headers.indexOf('email');
+        const passwordIdx = headers.indexOf('password');
+        const rows = data.slice(1); // Skip header row
+
+        if (rows.length === 0) {
+            return res.status(400).json({ message: `Excel file contains no intern data: ${file.originalname}` });
+        }
+
+        const registered = [];
         const errors = [];
 
         // Process each intern
-        for (const row of data) {
-            const { name, email, password } = row;
-            
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const name = row[nameIdx]?.toString()?.trim();
+            const email = row[emailIdx]?.toString()?.trim();
+            const password = row[passwordIdx]?.toString()?.trim();
+
             if (!name || !email || !password) {
-                errors.push(`Missing data for intern: ${name || email || 'Unknown'}`);
+                errors.push(`Row ${i + 2}: Missing required fields (name, email, or password)`);
                 continue;
             }
-            
+
+            // Validate email format
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                errors.push(`Row ${i + 2}: Invalid email format: ${email}`);
+                continue;
+            }
+
             try {
-                // Check for existing intern
+                // Check for duplicate email
                 const existingIntern = await Intern.findOne({ email });
-                
                 if (existingIntern) {
-                    // If intern exists, just add the batch to their batches array if not already there
-                    if (!existingIntern.batches.includes(batchId)) {
-                        existingIntern.batches.push(batchId);
-                        await existingIntern.save();
-                        registeredInterns.push({ name: existingIntern.name, email: existingIntern.email, status: 'Added to batch' });
-                    } else {
-                        errors.push(`Intern with email ${email} is already assigned to this batch`);
-                    }
+                    errors.push(`Row ${i + 2}: Email already exists: ${email}`);
                     continue;
                 }
-                
+
                 // Hash password
-                const hashedPassword = await bcrypt.hash(password.toString(), 10);
-                
-                // Create new intern
+                const hashedPassword = await bcrypt.hash(password, 10);
+
+                // Create intern
                 const intern = new Intern({
                     name,
                     email,
                     password: hashedPassword,
+                    role: 'Intern',
                     batches: [batchId],
-                    role: 'Intern'
+                    attendance: []
                 });
-                
-                await intern.save();
-                
-                // Update batch with new intern
+
+                const savedIntern = await intern.save();
+
+                // Update batch
                 await Batch.findByIdAndUpdate(batchId, {
-                    $push: { students: intern._id }
+                    $push: { students: savedIntern._id }
                 });
-                
-                registeredInterns.push({ name, email, status: 'Newly registered' });
+
+                registered.push({ name, email, status: 'Registered' });
             } catch (err) {
-                errors.push(`Error registering intern ${name}: ${err.message}`);
+                errors.push(`Row ${i + 2}: Error registering intern ${name || email}: ${err.message}`);
             }
         }
-        
+
+        // Return response
         res.status(200).json({
-            message: 'Bulk intern registration processed',
-            registered: registeredInterns,
+            registered,
             errors
         });
     } catch (err) {
         console.error('Bulk upload error:', err);
         res.status(500).json({ 
-            message: 'Server error processing bulk upload',
+            message: 'Server error during bulk upload',
             error: err.message 
         });
     }
 };
+
 
 module.exports = { adminRegister, adminLogIn, getAdminDetail, bulkInternRegister };

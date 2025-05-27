@@ -15,6 +15,22 @@ const internSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    mobileNo: {
+      type: String,
+  
+    },
+    parentsMobileNo: {
+      type: String,
+      
+    },
+    joiningDate: {
+      type: Date,
+      
+    },
+    collegeName: {
+      type: String,
+     
+    },
     role: {
       type: String,
       default: "Intern",

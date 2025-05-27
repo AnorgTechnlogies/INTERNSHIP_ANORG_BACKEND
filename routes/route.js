@@ -75,7 +75,7 @@ router.post('/AssignBatchToTeacher', assignBatchToTeacher);
 router.post('/RemoveBatchFromTeacher', removeBatchFromTeacher);
 
 router.post('/BulkInternAttendance', bulkInternAttendance);
-router.get('/Batch/Attendance/:batchID', getBatchAttendance);
+router.get('/Batch/Attendance/:batchId', getBatchAttendance);
 
 // Notice
 router.post('/NoticeCreate', noticeCreate);

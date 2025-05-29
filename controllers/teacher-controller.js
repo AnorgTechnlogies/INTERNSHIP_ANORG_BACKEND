@@ -1,4 +1,5 @@
 const bcrypt = require('bcrypt');
+const nodemailer = require('nodemailer');
 const Teacher = require('../models/teacherSchema.js');
 const Batch = require('../models/batchSchema.js');
 const Intern = require('../models/internSchema.js');
@@ -194,13 +195,88 @@ const deleteTeachersByBatch = async (req, res) => {
     }
 };
 
+const createTransporter = () => {
+    // Check if environment variables are properly set
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.error('Email credentials not found in environment variables');
+        console.log('EMAIL_USER:', process.env.EMAIL_USER ? 'Set' : 'Not set');
+        console.log('EMAIL_PASS:', process.env.EMAIL_PASS ? 'Set' : 'Not set');
+        return null;
+    }
+
+    return nodemailer.createTransporter({
+        service: 'gmail',
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+        },
+        // Add additional options for better reliability
+        secure: true,
+        port: 465,
+        tls: {
+            rejectUnauthorized: false
+        }
+    });
+};
+
+// Function to send absence email
+const sendAbsenceEmail = async (intern, batch, date) => {
+    const transporter = createTransporter();
+    
+    if (!transporter) {
+        console.error('Cannot create email transporter - missing credentials');
+        return { 
+            internId: intern._id, 
+            emailStatus: 'Failed to send email: Missing email credentials' 
+        };
+    }
+
+    const mailOptions = {
+        from: `"Attendance System" <${process.env.EMAIL_USER}>`,
+        to: intern.email,
+        subject: `Absence Notification for ${batch.batchName} on ${new Date(date).toISOString().substring(0, 10)}`,
+        html: `
+            <h3>Dear ${intern.name},</h3>
+            <p>You were marked <strong>Absent</strong> for the following batch:</p>
+            <ul>
+                <li><strong>Batch:</strong> ${batch.batchName}</li>
+                <li><strong>Subject:</strong> ${batch.subject}</li>
+                <li><strong>Date:</strong> ${new Date(date).toISOString().substring(0, 10)}</li>
+                <li><strong>Time:</strong> ${batch.time}</li>
+                <li><strong>Location:</strong> ${batch.location}</li>
+            </ul>
+            <p>Please contact your instructor or administrator if you have any questions.</p>
+            <p>Best regards, <br>ANORG Technology Pvt. Ltd.</p>
+        `,
+    };
+
+    try {
+        // Verify transporter before sending
+        await transporter.verify();
+        await transporter.sendMail(mailOptions);
+        return { internId: intern._id, emailStatus: 'Email sent successfully' };
+    } catch (error) {
+        console.error(`Failed to send email to ${intern.email}:`, error.message);
+        return { 
+            internId: intern._id, 
+            emailStatus: `Failed to send email: ${error.message}` 
+        };
+    }
+};
+
 const bulkInternAttendance = async (req, res) => {
     const { attendances, date, batchId } = req.body;
 
+    // Debug environment variables
+    console.log("EMAIL_USER exists:", !!process.env.EMAIL_USER);
+    console.log("EMAIL_PASS exists:", !!process.env.EMAIL_PASS);
+    
     try {
         // Validate input
         if (!Array.isArray(attendances) || !date || !batchId) {
-            return res.status(400).json({ message: 'Invalid input: attendances array, date, and batchId are required' });
+            return res.status(400).json({ 
+                message: 'Invalid input: attendances array, date, and batchId are required' 
+            });
         }
 
         // Parse date once
@@ -209,14 +285,24 @@ const bulkInternAttendance = async (req, res) => {
             return res.status(400).json({ message: 'Invalid date format' });
         }
 
+        // Fetch batch details for email content
+        const batch = await Batch.findById(batchId);
+        if (!batch) {
+            return res.status(404).json({ message: 'Batch not found' });
+        }
+
         // Track counts for teacher's attendance record
         let presentCount = 0;
         let absentCount = 0;
 
+        // Collect absent interns for email notifications
+        const absentInterns = [];
+
         const results = [];
         for (const { internId, status } of attendances) {
             if (!internId || !['Present', 'Absent'].includes(status)) {
-                continue; // Skip invalid entries
+                results.push({ internId, message: 'Invalid internId or status' });
+                continue;
             }
 
             // Update intern's attendance
@@ -236,29 +322,46 @@ const bulkInternAttendance = async (req, res) => {
             } else {
                 intern.attendance.push({
                     date: parsedDate,
-                    status
+                    status,
                 });
             }
 
             await intern.save();
-            
+
             // Update counts for teacher record
-            if (status === 'Present') presentCount++;
-            else absentCount++;
-            
+            if (status === 'Present') {
+                presentCount++;
+            } else {
+                absentCount++;
+                absentInterns.push(intern); // Collect absent interns
+            }
+
             results.push({ internId, message: 'Attendance updated successfully' });
         }
 
+        // Send emails to absent interns (only if email credentials are available)
+        let emailResults = [];
+        if (process.env.EMAIL_USER && process.env.EMAIL_PASS && absentInterns.length > 0) {
+            console.log(`Sending absence emails to ${absentInterns.length} interns...`);
+            emailResults = await Promise.all(
+                absentInterns.map(intern => sendAbsenceEmail(intern, batch, parsedDate))
+            );
+        } else if (absentInterns.length > 0) {
+            console.warn('Email credentials not configured. Skipping email notifications.');
+            emailResults = absentInterns.map(intern => ({
+                internId: intern._id,
+                emailStatus: 'Email skipped: credentials not configured'
+            }));
+        }
+
         // Update teacher's attendance summary for this date
-        const batch = await Batch.findById(batchId);
-        if (batch && batch.teacher) {
+        if (batch.teacher) {
             const teacher = await Teacher.findById(batch.teacher);
-            
             if (teacher) {
                 const existingTeacherAttendanceIndex = teacher.attendance.findIndex(
                     a => a.date.toDateString() === parsedDate.toDateString()
                 );
-                
+
                 if (existingTeacherAttendanceIndex !== -1) {
                     teacher.attendance[existingTeacherAttendanceIndex].presentCount = presentCount;
                     teacher.attendance[existingTeacherAttendanceIndex].absentCount = absentCount;
@@ -266,22 +369,31 @@ const bulkInternAttendance = async (req, res) => {
                     teacher.attendance.push({
                         date: parsedDate,
                         presentCount,
-                        absentCount
+                        absentCount,
                     });
                 }
-                
+
                 await teacher.save();
             }
         }
 
-        return res.status(200).json({ 
-            message: 'Bulk attendance processed', 
+        return res.status(200).json({
+            message: 'Bulk attendance processed',
             results,
-            summary: { presentCount, absentCount, total: presentCount + absentCount }
+            emailResults,
+            summary: { 
+                presentCount, 
+                absentCount, 
+                total: presentCount + absentCount,
+                emailsConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS)
+            },
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        console.error('Bulk attendance error:', error);
+        res.status(500).json({ 
+            message: 'Server error', 
+            error: error.message 
+        });
     }
 };
 

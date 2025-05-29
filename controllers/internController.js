@@ -39,15 +39,20 @@ const internRegister = async (req, res) => {
     }
 };
 
-
 const internLogIn = async (req, res) => {
-    try {
+    console.log("req body : ", req.body);
+
+    if (req.body.email && req.body.password) {
         let intern = await Intern.findOne({ email: req.body.email });
         if (intern) {
-            const validated = await bcrypt.compare(req.body.password, intern.password);
-            if (validated) {
-                // Populate batch information
-                intern = await intern.populate("batches", "batchName scheduleTitle");
+            // Compare hashed password
+            const isMatch = await bcrypt.compare(req.body.password, intern.password);
+            if (isMatch) {
+                // Populate batch information with relevant fields
+                await intern.populate({
+                    path: "batches",
+                    select: "batchName scheduleTitle modeOfBatch subject startDate endDate status",
+                });
                 intern.password = undefined;
                 res.send(intern);
             } else {
@@ -56,8 +61,8 @@ const internLogIn = async (req, res) => {
         } else {
             res.send({ message: "Intern not found" });
         }
-    } catch (err) {
-        res.status(500).json(err);
+    } else {
+        res.send({ message: "Email and password are required" });
     }
 };
 

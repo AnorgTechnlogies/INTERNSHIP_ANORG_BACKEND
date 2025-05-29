@@ -195,6 +195,7 @@ const deleteTeachersByBatch = async (req, res) => {
     }
 };
 
+// Function to create email transporter
 const createTransporter = () => {
     // Check if environment variables are properly set
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -204,17 +205,16 @@ const createTransporter = () => {
         return null;
     }
 
-    return nodemailer.createTransporter({
+    return nodemailer.createTransport({
         service: 'gmail',
         auth: {
             user: process.env.EMAIL_USER,
             pass: process.env.EMAIL_PASS,
         },
-        // Add additional options for better reliability
         secure: true,
         port: 465,
         tls: {
-            rejectUnauthorized: false
+            rejectUnauthorized: false // Note: Use with caution in production
         }
     });
 };
@@ -442,6 +442,184 @@ const getBatchAttendance = async (req, res) => {
     }
 };
 
+const cloudinary = require("cloudinary").v2;
+const mongoose = require("mongoose");
+const fs = require("fs").promises; // For file cleanup
+
+// Import your models
+const Notes = require("../models/notesModel.js"); // Adjust path as needed
+// const Batch = require("../models/batch"); // Adjust path as needed
+
+const addNotes = async (req, res) => {
+  // Configure Cloudinary (should be in a config file)
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+
+  console.log(" cloud_name:", process.env.CLOUDINARY_CLOUD_NAME,
+    "api_key:", process.env.CLOUDINARY_API_KEY,
+    " api_secret: ", process.env.CLOUDINARY_API_SECRET,)
+  
+  try {
+    const { batchId, title, content } = req.body;
+    const file = req.file; // Assuming file is sent via multipart/form-data
+
+    console.log('Received request:', { 
+      batchId, 
+      title, 
+      content, 
+      file: file ? {
+        originalname: file.originalname,
+        filename: file.filename,
+        path: file.path,
+        size: file.size,
+        mimetype: file.mimetype
+      } : 'No file' 
+    });
+
+    // Validate required fields
+    if (!batchId || !title || !content) {
+      console.error('Validation failed: Missing required fields');
+      return res.status(400).json({
+        message: "Batch ID, title, and content are required"
+      });
+    }
+
+    // Check Cloudinary configuration if file is provided
+    if (file && (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET)) {
+      console.error('Cloudinary environment variables not set');
+      return res.status(500).json({
+        message: "Cloudinary configuration is missing. Please check environment variables."
+      });
+    }
+
+    // Verify batch exists and get the assigned teacher
+    const batch = await Batch.findById(batchId).populate('teacher');
+    if (!batch) {
+      console.error('Batch not found:', batchId);
+      return res.status(404).json({
+        message: "Batch not found"
+      });
+    }
+
+    // Check if batch has a teacher assigned
+    if (!batch.teacher) {
+      console.error('No teacher assigned to batch:', batchId);
+      return res.status(400).json({
+        message: "No teacher is assigned to this batch"
+      });
+    }
+
+    // Get the teacher ID from the batch
+    const teacherId = batch.teacher._id;
+    console.log('Teacher found for batch:', {
+      teacherId: teacherId.toString(),
+      teacherName: batch.teacher.name || 'N/A',
+      batchName: batch.batchName
+    });
+
+    // Upload file to Cloudinary if provided
+    let fileUrl = {};
+    if (file) {
+      try {
+        console.log('Uploading file to Cloudinary...');
+        console.log('File details:', {
+          originalname: file.originalname,
+          mimetype: file.mimetype,
+          size: file.size,
+          hasBuffer: !!file.buffer
+        });
+
+        // Check if file buffer exists (since we're using memoryStorage)
+        if (!file.buffer) {
+          throw new Error('File buffer is missing - multer memoryStorage issue');
+        }
+
+        // Upload using file buffer (memoryStorage stores files as buffers)
+        console.log('Uploading using file buffer from memoryStorage...');
+        const base64String = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+        
+        const result = await cloudinary.uploader.upload(base64String, {
+          folder: "notes",
+          resource_type: "auto",
+          public_id: `note_${Date.now()}_${file.originalname.split('.')[0]}`,
+        });
+
+        fileUrl = {
+          public_id: result.public_id,
+          url: result.secure_url,
+        };
+        
+        // No need to clean up temporary files since we're using memoryStorage
+        console.log('File uploaded successfully to Cloudinary:', result.secure_url);
+      } catch (uploadError) {
+        console.error('Cloudinary upload error:', uploadError);
+        console.error('Upload error details:', {
+          message: uploadError.message,
+          stack: uploadError.stack,
+          originalName: file?.originalname,
+          hasBuffer: !!file?.buffer
+        });
+        
+        return res.status(500).json({
+          message: "Error uploading file to Cloudinary",
+          error: uploadError.message,
+          details: {
+            originalName: file?.originalname,
+            size: file?.size,
+            hasBuffer: !!file?.buffer
+          }
+        });
+      }
+    }
+
+    // Create new note
+    const newNote = await Notes.create({
+      batch: batchId,
+      title,
+      content,
+      fileUrl: Object.keys(fileUrl).length ? fileUrl : undefined,
+      uploadedBy: teacherId,
+    });
+
+    console.log('Note created successfully with ID:', newNote._id.toString());
+
+    // Add note reference to batch
+    batch.notes.push(newNote._id);
+    await batch.save();
+
+    console.log('Note reference added to batch');
+
+    // Populate batch and teacher details for response
+    const populatedNote = await Notes
+      .findById(newNote._id)
+      .populate("batch", "batchName subject")
+      .populate("uploadedBy", "name email");
+
+    console.log('Note populated and ready for response');
+
+    res.status(201).json({
+      success: true,
+      message: "Note added successfully",
+      note: populatedNote,
+    });
+
+  } catch (err) {
+    console.error('Error in addNotes:', err.message);
+    console.error('Stack trace:', err.stack);
+    res.status(500).json({
+      success: false,
+      message: "Error adding note",
+      error: err.message
+    });
+  }
+};
+
+
+
+
 module.exports = {
     teacherRegister,
     teacherLogIn,
@@ -452,5 +630,6 @@ module.exports = {
     deleteTeacher,
     deleteTeachersByBatch,
     bulkInternAttendance,
-    getBatchAttendance
+    getBatchAttendance,
+    addNotes
 };

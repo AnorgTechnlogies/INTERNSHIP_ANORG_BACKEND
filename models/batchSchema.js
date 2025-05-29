@@ -46,12 +46,18 @@ const batchSchema = new mongoose.Schema(
     teacher: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "teacher",
-      required: false, // Changed to optional
+      required: false,
     },
     students: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "intern",
+      },
+    ],
+    notes: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "notes",
       },
     ],
     description: {

@@ -31,7 +31,10 @@ const {
     deleteTeachersByBatch,
     bulkInternAttendance,
     getBatchAttendance,
-    addNotes
+    addNotes,
+    getNotes,
+    updateNotes,
+    deleteNotes
 } = require('../controllers/teacher-controller.js');
 
 
@@ -80,6 +83,11 @@ router.post('/BulkInternAttendance', bulkInternAttendance);
 router.get('/Batch/Attendance/:batchId', getBatchAttendance);
 // Route to handle file uploads with addNotes
 router.post("/addNotes", upload.single("file"), addNotes);
+
+// Notes
+router.get("/notes", getNotes);
+router.put("/notes/:noteId", upload.single("file"), updateNotes);
+router.delete("/notes/:noteId", deleteNotes);
 
 // Notice
 router.post('/NoticeCreate', noticeCreate);

@@ -84,19 +84,8 @@ const getAdminDetail = async (req, res) => {
 
 const bulkInternRegister = async (req, res) => {
     try {
-        // Validate inputs
         const { batchId } = req.body;
         const file = req.file;
-
-        // Log file details
-        console.log('File received:', {
-            originalname: file?.originalname,
-            mimetype: file?.mimetype,
-            bufferExists: !!file?.buffer,
-            bufferSize: file?.buffer?.length,
-            fieldname: file?.fieldname,
-            fileExists: !!file
-        });
 
         if (!file) {
             return res.status(400).json({ message: 'No file uploaded' });
@@ -106,35 +95,24 @@ const bulkInternRegister = async (req, res) => {
             return res.status(400).json({ message: 'Batch ID is required' });
         }
 
-        // Validate file type and extension
         const validMimeTypes = [
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/vnd.ms-excel'
+            'application/vnd.ms-excel',
         ];
         const validExtensions = ['.xlsx', '.xls'];
         const fileExtension = file.originalname.toLowerCase().slice(-5);
         if (!validMimeTypes.includes(file.mimetype) || !validExtensions.some(ext => fileExtension.endsWith(ext))) {
-            return res.status(400).json({ 
-                message: `Invalid file type: ${file.originalname}. Only .xlsx or .xls files are allowed` 
+            return res.status(400).json({
+                message: `Invalid file type: ${file.originalname}. Only .xlsx or .xls files are allowed`,
             });
         }
 
-        // Check buffer
-        if (!file.buffer) {
-            return res.status(400).json({ 
-                message: `Invalid file: ${file.originalname}. File buffer is missing, check server upload configuration` 
-            });
-        }
-        if (file.buffer.length === 0) {
-            return res.status(400).json({ 
-                message: `Invalid file: ${file.originalname}. File is empty` 
+        if (!file.buffer || file.buffer.length === 0) {
+            return res.status(400).json({
+                message: `Invalid file: ${file.originalname}. File buffer is missing or empty`,
             });
         }
 
-        // Log successful buffer receipt
-        console.log(`Buffer received for ${file.originalname}: ${file.buffer.length} bytes`);
-
-        // Validate batch ID
         let batch;
         try {
             batch = await Batch.findById(batchId);
@@ -145,14 +123,13 @@ const bulkInternRegister = async (req, res) => {
             return res.status(400).json({ message: 'Invalid Batch ID format' });
         }
 
-        // Parse Excel file
         let workbook;
         try {
             workbook = XLSX.read(file.buffer, { type: 'buffer' });
         } catch (err) {
-            return res.status(400).json({ 
-                message: `Invalid Excel file format: Unable to read file: ${file.originalname}`, 
-                details: err.message 
+            return res.status(400).json({
+                message: `Invalid Excel file format: Unable to read file: ${file.originalname}`,
+                details: err.message,
             });
         }
 
@@ -169,27 +146,31 @@ const bulkInternRegister = async (req, res) => {
                 return res.status(400).json({ message: `Excel file contains no data: ${file.originalname}` });
             }
         } catch (err) {
-            return res.status(400).json({ 
-                message: `Invalid Excel file format: Unable to parse sheet: ${file.originalname}`, 
-                details: err.message 
+            return res.status(400).json({
+                message: `Invalid Excel file format: Unable to parse sheet: ${file.originalname}`,
+                details: err.message,
             });
         }
 
-        // Process header and data
         const headers = data[0].map(h => String(h).toLowerCase().trim());
-        const expectedHeaders = ['name', 'email', 'password'];
-        const missingHeaders = expectedHeaders.filter(h => !headers.includes(h));
-        if (missingHeaders.length > 0) {
-            return res.status(400).json({ 
-                message: `Missing required columns in ${file.originalname}: ${missingHeaders.join(', ')}`
+        const expectedHeaders = ['name', 'email', 'password', 'mobileNo', 'parentsMobileNo', 'joiningDate', 'collegeName'];
+        const requiredHeaders = ['name', 'email', 'password'];
+        const missingRequiredHeaders = requiredHeaders.filter(h => !headers.includes(h));
+        if (missingRequiredHeaders.length > 0) {
+            return res.status(400).json({
+                message: `Missing required columns in ${file.originalname}: ${missingRequiredHeaders.join(', ')}`,
             });
         }
 
         const nameIdx = headers.indexOf('name');
         const emailIdx = headers.indexOf('email');
         const passwordIdx = headers.indexOf('password');
-        const rows = data.slice(1); // Skip header row
+        const mobileNoIdx = headers.indexOf('mobilenumber');
+        const parentsMobileNoIdx = headers.indexOf('parentsmobilenumber');
+        const joiningDateIdx = headers.indexOf('joiningdate');
+        const collegeNameIdx = headers.indexOf('collegename');
 
+        const rows = data.slice(1);
         if (rows.length === 0) {
             return res.status(400).json({ message: `Excel file contains no intern data: ${file.originalname}` });
         }
@@ -197,19 +178,21 @@ const bulkInternRegister = async (req, res) => {
         const registered = [];
         const errors = [];
 
-        // Process each intern
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             const name = row[nameIdx]?.toString()?.trim();
             const email = row[emailIdx]?.toString()?.trim();
             const password = row[passwordIdx]?.toString()?.trim();
+            const mobileNo = mobileNoIdx !== -1 ? row[mobileNoIdx]?.toString()?.trim() : undefined;
+            const parentsMobileNo = parentsMobileNoIdx !== -1 ? row[parentsMobileNoIdx]?.toString()?.trim() : undefined;
+            const joiningDate = joiningDateIdx !== -1 && row[joiningDateIdx] ? new Date(row[joiningDateIdx]) : undefined;
+            const collegeName = collegeNameIdx !== -1 ? row[collegeNameIdx]?.toString()?.trim() : undefined;
 
             if (!name || !email || !password) {
                 errors.push(`Row ${i + 2}: Missing required fields (name, email, or password)`);
                 continue;
             }
 
-            // Validate email format
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailRegex.test(email)) {
                 errors.push(`Row ${i + 2}: Invalid email format: ${email}`);
@@ -217,31 +200,31 @@ const bulkInternRegister = async (req, res) => {
             }
 
             try {
-                // Check for duplicate email
                 const existingIntern = await Intern.findOne({ email });
                 if (existingIntern) {
                     errors.push(`Row ${i + 2}: Email already exists: ${email}`);
                     continue;
                 }
 
-                // Hash password
                 const hashedPassword = await bcrypt.hash(password, 10);
 
-                // Create intern
                 const intern = new Intern({
                     name,
                     email,
                     password: hashedPassword,
+                    mobileNo,
+                    parentsMobileNo,
+                    joiningDate,
+                    collegeName,
                     role: 'Intern',
                     batches: [batchId],
-                    attendance: []
+                    attendance: [],
                 });
 
                 const savedIntern = await intern.save();
 
-                // Update batch
                 await Batch.findByIdAndUpdate(batchId, {
-                    $push: { students: savedIntern._id }
+                    $push: { students: savedIntern._id },
                 });
 
                 registered.push({ name, email, status: 'Registered' });
@@ -250,16 +233,15 @@ const bulkInternRegister = async (req, res) => {
             }
         }
 
-        // Return response
         res.status(200).json({
             registered,
-            errors
+            errors,
         });
     } catch (err) {
         console.error('Bulk upload error:', err);
-        res.status(500).json({ 
+        res.status(500).json({
             message: 'Server error during bulk upload',
-            error: err.message 
+            error: err.message,
         });
     }
 };

@@ -11,31 +11,37 @@ const internRegister = async (req, res) => {
         });
 
         if (existingIntern) {
-            res.send({ message: 'Email already exists' });
-        } else {
-            const batchIds = req.body.batches || [];
-            
-            const intern = new Intern({
-                name: req.body.name,
-                email: req.body.email,
-                password: hashedPass,
-                batches: batchIds
-            });
-
-            let result = await intern.save();
-
-            if (batchIds.length > 0) {
-                await Batch.updateMany(
-                    { _id: { $in: batchIds } },
-                    { $push: { students: result._id } }
-                );
-            }
-
-            result.password = undefined;
-            res.send(result);
+            return res.status(400).json({ message: 'Email already exists' });
         }
+
+        const batchIds = req.body.batches || [];
+
+        const intern = new Intern({
+            name: req.body.name,
+            email: req.body.email,
+            password: hashedPass,
+            mobileNo: req.body.mobileNo,
+            parentsMobileNo: req.body.parentsMobileNo,
+            joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : undefined,
+            collegeName: req.body.collegeName,
+            batches: batchIds,
+            role: 'Intern',
+            attendance: [],
+        });
+
+        let result = await intern.save();
+
+        if (batchIds.length > 0) {
+            await Batch.updateMany(
+                { _id: { $in: batchIds } },
+                { $push: { students: result._id } }
+            );
+        }
+
+        result.password = undefined;
+        res.status(201).json(result);
     } catch (err) {
-        res.status(500).json(err);
+        res.status(500).json({ message: 'Server error', error: err.message });
     }
 };
 

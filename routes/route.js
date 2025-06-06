@@ -19,7 +19,7 @@ const {
     assignBatchToIntern,
     removeBatchFromIntern,
     getInternsByBatch
-} = require('../controllers/interncontroller.js');
+} = require('../controllers/internController.js');
 const {
     teacherRegister,
     teacherLogIn,

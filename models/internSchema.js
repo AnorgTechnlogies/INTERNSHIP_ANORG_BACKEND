@@ -6,6 +6,9 @@ const internSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    fatherName: {
+      type: String,
+    },
     email: {
       type: String,
       required: true,
@@ -17,19 +20,18 @@ const internSchema = new mongoose.Schema(
     },
     mobileNo: {
       type: String,
-  
     },
     parentsMobileNo: {
       type: String,
-      
     },
     joiningDate: {
       type: Date,
-      
     },
     collegeName: {
       type: String,
-     
+    },
+    address: {
+      type: String,
     },
     role: {
       type: String,

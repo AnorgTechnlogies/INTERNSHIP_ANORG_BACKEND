@@ -1,49 +1,53 @@
 const bcrypt = require('bcrypt');
 const Intern = require('../models/internSchema.js');
 const Batch = require('../models/batchSchema.js');
+
 const internRegister = async (req, res) => {
-    try {
-        const salt = await bcrypt.genSalt(10);
-        const hashedPass = await bcrypt.hash(req.body.password, salt);
+  try {
+    const salt = await bcrypt.genSalt(10);
+    const hashedPass = await bcrypt.hash(req.body.password, salt);
 
-        const existingIntern = await Intern.findOne({
-            email: req.body.email,
-        });
+    const existingIntern = await Intern.findOne({
+      email: req.body.email,
+    });
 
-        if (existingIntern) {
-            return res.status(400).json({ message: 'Email already exists' });
-        }
-
-        const batchIds = req.body.batches || [];
-
-        const intern = new Intern({
-            name: req.body.name,
-            email: req.body.email,
-            password: hashedPass,
-            mobileNo: req.body.mobileNo,
-            parentsMobileNo: req.body.parentsMobileNo,
-            joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : undefined,
-            collegeName: req.body.collegeName,
-            batches: batchIds,
-            role: 'Intern',
-            attendance: [],
-        });
-
-        let result = await intern.save();
-
-        if (batchIds.length > 0) {
-            await Batch.updateMany(
-                { _id: { $in: batchIds } },
-                { $push: { students: result._id } }
-            );
-        }
-
-        result.password = undefined;
-        res.status(201).json(result);
-    } catch (err) {
-        res.status(500).json({ message: 'Server error', error: err.message });
+    if (existingIntern) {
+      return res.status(400).json({ message: 'Email already exists' });
     }
+
+    const batchIds = req.body.batches || [];
+
+    const intern = new Intern({
+      name: req.body.name,
+      fatherName: req.body.fatherName,
+      email: req.body.email,
+      password: hashedPass,
+      mobileNo: req.body.mobileNo,
+      parentsMobileNo: req.body.parentsMobileNo,
+      joiningDate: req.body.joiningDate ? new Date(req.body.joiningDate) : undefined,
+      collegeName: req.body.collegeName,
+      address: req.body.address,
+      batches: batchIds,
+      role: 'Intern',
+      attendance: [],
+    });
+
+    let result = await intern.save();
+
+    if (batchIds.length > 0) {
+      await Batch.updateMany(
+        { _id: { $in: batchIds } },
+        { $push: { students: result._id } }
+      );
+    }
+
+    result.password = undefined;
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
 };
+
 
 const internLogIn = async (req, res) => {
     console.log("req body : ", req.body);

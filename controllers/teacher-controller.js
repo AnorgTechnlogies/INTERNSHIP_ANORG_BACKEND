@@ -3,6 +3,7 @@ const nodemailer = require("nodemailer");
 const Teacher = require("../models/teacherSchema.js");
 const Batch = require("../models/batchSchema.js");
 const Intern = require("../models/internSchema.js");
+const axios = require('axios')
 
 const teacherRegister = async (req, res) => {
   const { name, email, password, role, batchId } = req.body;
@@ -192,129 +193,45 @@ const deleteTeachersByBatch = async (req, res) => {
   }
 };
 
-// Function to create email transporter
-const createTransporter = () => {
-  // Check if environment variables are properly set
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error("Email credentials not found in environment variables");
-    console.log("EMAIL_USER:", process.env.EMAIL_USER ? "Set" : "Not set");
-    console.log("EMAIL_PASS:", process.env.EMAIL_PASS ? "Set" : "Not set");
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-    secure: true,
-    port: 465,
-    tls: {
-      rejectUnauthorized: false, // Note: Use with caution in production
-    },
-  });
-};
-
-// Function to send absence email
-const sendAbsenceEmail = async (intern, batch, date) => {
-  const transporter = createTransporter();
-
-  if (!transporter) {
-    console.error("Cannot create email transporter - missing credentials");
-    return {
-      internId: intern._id,
-      emailStatus: "Failed to send email: Missing email credentials",
-    };
-  }
-
-  const mailOptions = {
-    from: `"Attendance System" <${process.env.EMAIL_USER}>`,
-    to: intern.email,
-    subject: `Absence Notification for ${batch.batchName} on ${new Date(date)
-      .toISOString()
-      .substring(0, 10)}`,
-    html: `
-            <h3>Dear ${intern.name},</h3>
-            <p>You were marked <strong>Absent</strong> for the following batch:</p>
-            <ul>
-                <li><strong>Batch:</strong> ${batch.batchName}</li>
-                <li><strong>Subject:</strong> ${batch.subject}</li>
-                <li><strong>Date:</strong> ${new Date(date)
-                  .toISOString()
-                  .substring(0, 10)}</li>
-                <li><strong>Time:</strong> ${batch.time}</li>
-                <li><strong>Location:</strong> ${batch.location}</li>
-            </ul>
-            <p>Please contact your instructor or administrator if you have any questions.</p>
-            <p>Best regards, <br>ANORG Technology Pvt. Ltd.</p>
-        `,
-  };
-
-  try {
-    // Verify transporter before sending
-    await transporter.verify();
-    await transporter.sendMail(mailOptions);
-    return { internId: intern._id, emailStatus: "Email sent successfully" };
-  } catch (error) {
-    console.error(`Failed to send email to ${intern.email}:`, error.message);
-    return {
-      internId: intern._id,
-      emailStatus: `Failed to send email: ${error.message}`,
-    };
-  }
-};
-
 const bulkInternAttendance = async (req, res) => {
   const { attendances, date, batchId } = req.body;
 
-  // Debug environment variables
-  console.log("EMAIL_USER exists:", !!process.env.EMAIL_USER);
-  console.log("EMAIL_PASS exists:", !!process.env.EMAIL_PASS);
+  console.log("req.body : ", req.body);
 
   try {
-    // Validate input
     if (!Array.isArray(attendances) || !date || !batchId) {
       return res.status(400).json({
-        message:
-          "Invalid input: attendances array, date, and batchId are required",
+        message: "Invalid input: attendances array, date, and batchId are required",
       });
     }
 
-    // Parse date once
     const parsedDate = new Date(date);
     if (isNaN(parsedDate)) {
       return res.status(400).json({ message: "Invalid date format" });
     }
 
-    // Fetch batch details for email content
     const batch = await Batch.findById(batchId);
     if (!batch) {
       return res.status(404).json({ message: "Batch not found" });
     }
 
-    // Track counts for teacher's attendance record
     let presentCount = 0;
     let absentCount = 0;
-
-    // Collect absent interns for email notifications
     const absentInterns = [];
-
     const results = [];
+
     for (const { internId, status } of attendances) {
       if (!internId || !["Present", "Absent"].includes(status)) {
         results.push({ internId, message: "Invalid internId or status" });
         continue;
       }
 
-      // Update intern's attendance
       const intern = await Intern.findById(internId);
       if (!intern) {
         results.push({ internId, message: "Intern not found" });
         continue;
       }
 
-      // Check for existing attendance entry on this date
       const existingAttendanceIndex = intern.attendance.findIndex(
         (a) => a.date.toDateString() === parsedDate.toDateString()
       );
@@ -330,43 +247,58 @@ const bulkInternAttendance = async (req, res) => {
 
       await intern.save();
 
-      // Update counts for teacher record
       if (status === "Present") {
         presentCount++;
       } else {
         absentCount++;
-        absentInterns.push(intern); // Collect absent interns
+        absentInterns.push(intern);
       }
 
       results.push({ internId, message: "Attendance updated successfully" });
     }
 
-    // Send emails to absent interns (only if email credentials are available)
-    let emailResults = [];
-    if (
-      process.env.EMAIL_USER &&
-      process.env.EMAIL_PASS &&
-      absentInterns.length > 0
-    ) {
-      console.log(
-        `Sending absence emails to ${absentInterns.length} interns...`
+    let whatsappResults = [];
+    if (absentInterns.length > 0) {
+      console.log("absentInterns : ", absentInterns);
+      console.log(`Sending WhatsApp messages to ${absentInterns.length} parents...`);
+      whatsappResults = await Promise.all(
+        absentInterns.map(async (intern) => {
+          if (!intern.parentsMobileNo || !/^\d{10}$/.test(intern.parentsMobileNo)) {
+            console.error(`Invalid or missing parent mobile for intern ${intern._id}: ${intern.parentsMobileNo}`);
+            return {
+              internId: intern._id,
+              whatsappStatus: "Failed to send WhatsApp message: Invalid or missing parent mobile",
+            };
+          }
+
+          try {
+            const message = `Dear Parent,\n\nYour student *${intern.name}* was marked *Absent* for the following session:\n- *Batch*: ${batch.batchName}\n- *Subject*: ${batch.subject}\n- *Date*: ${parsedDate.toISOString().substring(0, 10)}\n- *Time*: ${batch.time}\n\nPlease contact the instructor if you have any questions.\n\nBest regards,\nANORG Technologies Private Limited\nAviskar Apartment, Santaji Nagar, Gajanan Colony,\nNear Chauragade School, Gondia-441614 (Maharashtra)`;
+            const response = await axios.get('https://int.chatway.in/api/send-msg', {
+              params: {
+                username: 'anorg',
+                number: `91${intern.parentsMobileNo}`,
+                message: message,
+                token: 'enlkeG15cnlrdElSUkNzNk01ampydz09',
+              },
+            });
+
+            console.log(`WhatsApp API response for ${intern.parentsMobileNo}:`, response.data);
+
+            return {
+              internId: intern._id,
+              whatsappStatus: `WhatsApp message sent successfully to ${intern.parentsMobileNo}`,
+            };
+          } catch (error) {
+            console.error(`Failed to send WhatsApp message to ${intern.parentsMobileNo}:`, error.message, error.response?.data);
+            return {
+              internId: intern._id,
+              whatsappStatus: `Failed to send WhatsApp message: ${error.message}`,
+            };
+          }
+        })
       );
-      emailResults = await Promise.all(
-        absentInterns.map((intern) =>
-          sendAbsenceEmail(intern, batch, parsedDate)
-        )
-      );
-    } else if (absentInterns.length > 0) {
-      console.warn(
-        "Email credentials not configured. Skipping email notifications."
-      );
-      emailResults = absentInterns.map((intern) => ({
-        internId: intern._id,
-        emailStatus: "Email skipped: credentials not configured",
-      }));
     }
 
-    // Update teacher's attendance summary for this date
     if (batch.teacher) {
       const teacher = await Teacher.findById(batch.teacher);
       if (teacher) {
@@ -375,10 +307,8 @@ const bulkInternAttendance = async (req, res) => {
         );
 
         if (existingTeacherAttendanceIndex !== -1) {
-          teacher.attendance[existingTeacherAttendanceIndex].presentCount =
-            presentCount;
-          teacher.attendance[existingTeacherAttendanceIndex].absentCount =
-            absentCount;
+          teacher.attendance[existingTeacherAttendanceIndex].presentCount = presentCount;
+          teacher.attendance[existingTeacherAttendanceIndex].absentCount = absentCount;
         } else {
           teacher.attendance.push({
             date: parsedDate,
@@ -394,12 +324,12 @@ const bulkInternAttendance = async (req, res) => {
     return res.status(200).json({
       message: "Bulk attendance processed",
       results,
-      emailResults,
+      whatsappResults,
       summary: {
         presentCount,
         absentCount,
         total: presentCount + absentCount,
-        emailsConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+        whatsappSent: whatsappResults.length > 0,
       },
     });
   } catch (error) {

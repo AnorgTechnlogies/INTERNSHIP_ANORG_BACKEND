@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const upload = require('../middlewares/multer.js');
-const { adminRegister, adminLogIn, getAdminDetail, bulkInternRegister } = require('../controllers/admin-controller.js');
+const { adminRegister, adminLogIn, getAdminDetail, bulkInternRegister, getAllAttendance } = require('../controllers/admin-controller.js');
 const { batchCreate, batchList, deleteBatch, deleteBatches, getBatchDetail, getBatchInterns, updateBatchStatus, assignInternToBatch, removeInternFromBatch, getUpcomingBatches, getOngoingBatches } = require('../controllers/batchController.js');
 const { complainCreate, complainList } = require('../controllers/complain-controller.js');
 const { noticeCreate, noticeList, deleteNotices, deleteNotice, updateNotice } = require('../controllers/notice-controller.js');
@@ -65,6 +65,9 @@ router.put('/RemoveInternAtten/:id', removeInternAttendance);
 router.post('/AssignBatchToIntern', assignBatchToIntern);
 router.post('/RemoveBatchFromIntern', removeBatchFromIntern);
 router.get('/InternsByBatch/:id', getInternsByBatch);
+
+
+router.get('/Attendance', getAllAttendance);
 
 // Teacher
 router.post('/TeacherReg', teacherRegister);

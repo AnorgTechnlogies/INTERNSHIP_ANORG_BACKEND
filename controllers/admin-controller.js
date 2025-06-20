@@ -317,9 +317,98 @@ const bulkInternRegister = async (req, res) => {
   }
 };
 
+// Get attendance for all interns by date, week, or month
+const getAllAttendance = async (req, res) => {
+  try {
+    const { period, date } = req.query; // period: 'daily', 'weekly', 'monthly'
+
+    // Validate query parameters
+    if (!period || !['daily', 'weekly', 'monthly'].includes(period)) {
+      return res.status(400).send({ message: "Invalid or missing period parameter" });
+    }
+
+    if (!date) {
+      return res.status(400).send({ message: "Date parameter is required" });
+    }
+
+    const targetDate = new Date(date);
+    if (isNaN(targetDate)) {
+      return res.status(400).send({ message: "Invalid date format" });
+    }
+
+    // Define date range based on period
+    let startDate, endDate;
+    if (period === 'daily') {
+      startDate = new Date(targetDate.setHours(0, 0, 0, 0));
+      endDate = new Date(targetDate.setHours(23, 59, 59, 999));
+    } else if (period === 'weekly') {
+      startDate = new Date(targetDate);
+      startDate.setDate(targetDate.getDate() - targetDate.getDay()); // Start of week (Sunday)
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 6); // End of week (Saturday)
+      endDate.setHours(23, 59, 59, 999);
+    } else if (period === 'monthly') {
+      startDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
+      endDate = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    // Fetch interns with their attendance within the date range
+    const interns = await Intern.find({})
+      .select('name email attendance')
+      .lean();
+
+    // Generate list of dates in the period
+    const dateList = [];
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      dateList.push(new Date(d).toISOString().substring(0, 10));
+    }
+
+    // Format attendance data as a map for each intern
+    const attendanceData = interns.map(intern => {
+      const attendanceMap = {};
+      dateList.forEach(date => {
+        const record = intern.attendance.find(a => 
+          new Date(a.date).toISOString().substring(0, 10) === date
+        );
+        attendanceMap[date] = record ? record.status : null;
+      });
+
+      return {
+        _id: intern._id,
+        name: intern.name,
+        email: intern.email,
+        attendance: attendanceMap,
+      };
+    });
+
+    // Aggregate summary statistics
+    const summary = {
+      totalInterns: attendanceData.length,
+      totalPresent: attendanceData.reduce((sum, intern) => 
+        sum + Object.values(intern.attendance).filter(a => a === 'Present').length, 0),
+      totalAbsent: attendanceData.reduce((sum, intern) => 
+        sum + Object.values(intern.attendance).filter(a => a === 'Absent').length, 0),
+      period,
+      startDate,
+      endDate,
+      dateList,
+    };
+
+    res.status(200).send({ attendanceData, summary });
+  } catch (err) {
+    console.error("Attendance fetch error:", err);
+    res.status(500).json({ message: "Internal server error", error: err.message });
+  }
+};
+
+
+
 module.exports = {
   adminRegister,
   adminLogIn,
   getAdminDetail,
   bulkInternRegister,
+  getAllAttendance,
 };

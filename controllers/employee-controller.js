@@ -98,155 +98,6 @@ const getAllEmployeesByAdmin = async (req, res) => {
   }
 };
 
-const employeeClockIn = async (req, res) => {
-  try {
-    const { employeeId } = req.body;
-    if (!employeeId) {
-      return res.status(400).json({ message: "Employee ID is required" });
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of today
-
-    const employee = await Employee.findOne({ employeeId });
-    if (!employee) {
-      return res.status(404).json({ message: "Employee not found" });
-    }
-
-    const existingAttendanceIndex = employee.attendance.findIndex(
-      (a) => new Date(a.date).toDateString() === today.toDateString()
-    );
-
-    if (existingAttendanceIndex !== -1) {
-      const existingRecord = employee.attendance[existingAttendanceIndex];
-      if (existingRecord.status === "Present" && existingRecord.loginTime) {
-        return res.status(400).json({ 
-          message: "Already clocked in for today",
-          loginTime: existingRecord.loginTime
-        });
-      }
-      if (existingRecord.status === "Absent") {
-        return res.status(400).json({ 
-          message: "Attendance already marked as Absent for today" 
-        });
-      }
-      // If status is Leave or Work From Home, or no loginTime, allow clock in (override if needed)
-    }
-
-    const loginTime = new Date();
-
-    const attendanceRecord = {
-      date: today,
-      status: "Present",
-      loginTime,
-      whatsappSent: false,
-    };
-
-    if (existingAttendanceIndex !== -1) {
-      employee.attendance[existingAttendanceIndex] = attendanceRecord;
-    } else {
-      employee.attendance.push(attendanceRecord);
-    }
-
-    await employee.save();
-    employee.password = undefined;
-
-    res.status(200).json({
-      message: "Clocked in successfully",
-      employee: {
-        _id: employee._id,
-        employeeId: employee.employeeId,
-        name: employee.name,
-        loginTime: loginTime.toISOString(),
-      }
-    });
-  } catch (error) {
-    console.error("Clock in error:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
-  }
-};
-
-const employeeClockOut = async (req, res) => {
-  try {
-    const { employeeId } = req.body;
-    if (!employeeId) {
-      return res.status(400).json({ message: "Employee ID is required" });
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const employee = await Employee.findOne({ employeeId });
-    if (!employee) {
-      return res.status(404).json({ message: "Employee not found" });
-    }
-
-    const existingAttendanceIndex = employee.attendance.findIndex(
-      (a) => new Date(a.date).toDateString() === today.toDateString()
-    );
-
-    if (existingAttendanceIndex === -1) {
-      return res.status(400).json({ 
-        message: "No attendance record found for today. Please clock in first." 
-      });
-    }
-
-    const existingRecord = employee.attendance[existingAttendanceIndex];
-    if (existingRecord.status !== "Present") {
-      return res.status(400).json({ 
-        message: `Cannot clock out: Status is ${existingRecord.status}` 
-      });
-    }
-
-    if (existingRecord.logoutTime) {
-      return res.status(400).json({ 
-        message: "Already clocked out for today",
-        logoutTime: existingRecord.logoutTime
-      });
-    }
-
-    const logoutTime = new Date();
-    const loginTime = existingRecord.loginTime;
-
-    if (!loginTime) {
-      return res.status(400).json({ 
-        message: "No login time found. Please clock in first." 
-      });
-    }
-
-    if (logoutTime <= loginTime) {
-      return res.status(400).json({ 
-        message: "Logout time must be after login time" 
-      });
-    }
-
-    // Calculate working hours
-    const diffMs = logoutTime - loginTime;
-    const workingHours = (diffMs / (1000 * 60 * 60)).toFixed(2);
-
-    existingRecord.logoutTime = logoutTime;
-    existingRecord.workingHours = parseFloat(workingHours);
-
-    await employee.save();
-    employee.password = undefined;
-
-    res.status(200).json({
-      message: "Clocked out successfully",
-      employee: {
-        _id: employee._id,
-        employeeId: employee.employeeId,
-        name: employee.name,
-        loginTime: loginTime.toISOString(),
-        logoutTime: logoutTime.toISOString(),
-        workingHours: parseFloat(workingHours),
-      }
-    });
-  } catch (error) {
-    console.error("Clock out error:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
-  }
-};
-
 const employeeAttendanceByAdmin = async (req, res) => {
   const { attendances, date, adminID } = req.body;
 
@@ -270,7 +121,7 @@ const employeeAttendanceByAdmin = async (req, res) => {
     const absentEmployees = [];
     const results = [];
 
-    for (const { employeeId, status, loginTime, logoutTime } of attendances) {
+    for (const { employeeId, status } of attendances) {
       if (
         !employeeId ||
         !["Present", "Absent", "Work From Home", "Leave"].includes(status)
@@ -288,58 +139,17 @@ const employeeAttendanceByAdmin = async (req, res) => {
         continue;
       }
 
-      // Validate loginTime and logoutTime for Present and Work From Home
-      let parsedLoginTime, parsedLogoutTime, workingHours;
-      if (status === "Present" || status === "Work From Home") {
-        if (!loginTime || !logoutTime) {
-          results.push({
-            employeeId,
-            message: "Login and logout times are required for Present or Work From Home status",
-          });
-          continue;
-        }
-
-        parsedLoginTime = new Date(`${date}T${loginTime}`);
-        parsedLogoutTime = new Date(`${date}T${logoutTime}`);
-
-        if (isNaN(parsedLoginTime) || isNaN(parsedLogoutTime)) {
-          results.push({
-            employeeId,
-            message: "Invalid login or logout time format",
-          });
-          continue;
-        }
-
-        if (parsedLogoutTime <= parsedLoginTime) {
-          results.push({
-            employeeId,
-            message: "Logout time must be after login time",
-          });
-          continue;
-        }
-
-        // Calculate working hours
-        const diffMs = parsedLogoutTime - parsedLoginTime;
-        workingHours = (diffMs / (1000 * 60 * 60)).toFixed(2); // Convert to hours
-      }
-
       const existingAttendanceIndex = employee.attendance.findIndex(
         (a) => a.date.toDateString() === parsedDate.toDateString()
       );
 
-      const attendanceRecord = {
-        date: parsedDate,
-        status,
-        ...(status === "Present" || status === "Work From Home"
-          ? { loginTime: parsedLoginTime, logoutTime: parsedLogoutTime, workingHours }
-          : {}),
-        whatsappSent: false,
-      };
-
       if (existingAttendanceIndex !== -1) {
-        employee.attendance[existingAttendanceIndex] = attendanceRecord;
+        employee.attendance[existingAttendanceIndex].status = status;
       } else {
-        employee.attendance.push(attendanceRecord);
+        employee.attendance.push({
+          date: parsedDate,
+          status,
+        });
       }
 
       await employee.save();
@@ -351,11 +161,7 @@ const employeeAttendanceByAdmin = async (req, res) => {
         absentEmployees.push(employee);
       }
 
-      results.push({ 
-        employeeId, 
-        message: "Attendance updated successfully",
-        workingHours: workingHours || null
-      });
+      results.push({ employeeId, message: "Attendance updated successfully" });
     }
 
     let whatsappResults = [];
@@ -366,6 +172,7 @@ const employeeAttendanceByAdmin = async (req, res) => {
       );
       whatsappResults = await Promise.all(
         absentEmployees.map(async (employee) => {
+          // Check if a WhatsApp notification was already sent for this date
           const lastNotification = employee.attendance
             .filter((a) => a.status === "Absent")
             .find((a) => a.date.toDateString() === parsedDate.toDateString());
@@ -413,6 +220,7 @@ const employeeAttendanceByAdmin = async (req, res) => {
               response.data
             );
 
+            // Update attendance record to mark WhatsApp as sent
             const attendanceIndex = employee.attendance.findIndex(
               (a) => a.date.toDateString() === parsedDate.toDateString()
             );
@@ -606,6 +414,7 @@ const bulkEmployeeRegister = async (req, res) => {
         continue;
       }
 
+      // Append @user to email if it doesn't contain an @ symbol
       if (!email.includes("@")) {
         email = `${email}@user`;
       }
@@ -616,6 +425,7 @@ const bulkEmployeeRegister = async (req, res) => {
         continue;
       }
 
+      // Set default password as the part of the email before @
       const password = email.split("@")[0];
       if (!password) {
         errors.push(
@@ -686,10 +496,12 @@ const bulkEmployeeRegister = async (req, res) => {
   }
 };
 
+// Get attendance for all employees by date, week, or month
 const getAllEmployeeAttendance = async (req, res) => {
   try {
-    const { period, date } = req.query;
+    const { period, date } = req.query; // period: 'daily', 'weekly', 'monthly'
 
+    // Validate query parameters
     if (!period || !["daily", "weekly", "monthly"].includes(period)) {
       return res
         .status(400)
@@ -705,16 +517,17 @@ const getAllEmployeeAttendance = async (req, res) => {
       return res.status(400).send({ message: "Invalid date format" });
     }
 
+    // Define date range based on period
     let startDate, endDate;
     if (period === "daily") {
       startDate = new Date(targetDate.setHours(0, 0, 0, 0));
       endDate = new Date(targetDate.setHours(23, 59, 59, 999));
     } else if (period === "weekly") {
       startDate = new Date(targetDate);
-      startDate.setDate(targetDate.getDate() - targetDate.getDay());
+      startDate.setDate(targetDate.getDate() - targetDate.getDay()); // Start of week (Sunday)
       startDate.setHours(0, 0, 0, 0);
       endDate = new Date(startDate);
-      endDate.setDate(startDate.getDate() + 6);
+      endDate.setDate(startDate.getDate() + 6); // End of week (Saturday)
       endDate.setHours(23, 59, 59, 999);
     } else if (period === "monthly") {
       startDate = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
@@ -726,10 +539,12 @@ const getAllEmployeeAttendance = async (req, res) => {
       endDate.setHours(23, 59, 59, 999);
     }
 
+    // Fetch employees with their attendance within the date range
     const employees = await Employee.find({})
       .select("employeeId name email attendance")
       .lean();
 
+    // Generate list of dates in the period
     const dateList = [];
     for (
       let d = new Date(startDate);
@@ -739,24 +554,14 @@ const getAllEmployeeAttendance = async (req, res) => {
       dateList.push(new Date(d).toISOString().substring(0, 10));
     }
 
+    // Format attendance data as a map for each employee
     const attendanceData = employees.map((employee) => {
       const attendanceMap = {};
       dateList.forEach((date) => {
         const record = employee.attendance.find(
           (a) => new Date(a.date).toISOString().substring(0, 10) === date
         );
-        attendanceMap[date] = record
-          ? {
-              status: record.status,
-              loginTime: record.loginTime
-                ? record.loginTime.toISOString().substring(11, 16)
-                : null,
-              logoutTime: record.logoutTime
-                ? record.logoutTime.toISOString().substring(11, 16)
-                : null,
-              workingHours: record.workingHours || null,
-            }
-          : null;
+        attendanceMap[date] = record ? record.status : null;
       });
 
       return {
@@ -768,50 +573,38 @@ const getAllEmployeeAttendance = async (req, res) => {
       };
     });
 
+    // Aggregate summary statistics
     const summary = {
       totalEmployees: attendanceData.length,
       totalPresent: attendanceData.reduce(
         (sum, employee) =>
           sum +
-          Object.values(employee.attendance).filter(
-            (a) => a && a.status === "Present"
-          ).length,
+          Object.values(employee.attendance).filter((a) => a === "Present")
+            .length,
         0
       ),
       totalAbsent: attendanceData.reduce(
         (sum, employee) =>
           sum +
-          Object.values(employee.attendance).filter(
-            (a) => a && a.status === "Absent"
-          ).length,
+          Object.values(employee.attendance).filter((a) => a === "Absent")
+            .length,
         0
       ),
       totalWorkFromHome: attendanceData.reduce(
         (sum, employee) =>
           sum +
           Object.values(employee.attendance).filter(
-            (a) => a && a.status === "Work From Home"
+            (a) => a === "Work From Home"
           ).length,
         0
       ),
       totalLeave: attendanceData.reduce(
         (sum, employee) =>
           sum +
-          Object.values(employee.attendance).filter(
-            (a) => a && a.status === "Leave"
-          ).length,
+          Object.values(employee.attendance).filter((a) => a === "Leave")
+            .length,
         0
       ),
-      totalWorkingHours: attendanceData.reduce(
-        (sum, employee) =>
-          sum +
-          Object.values(employee.attendance).reduce(
-            (sumHours, record) =>
-              sumHours + (record && record.workingHours ? parseFloat(record.workingHours) : 0),
-            0
-          ),
-        0
-      ).toFixed(2),
       period,
       startDate,
       endDate,
@@ -835,6 +628,4 @@ module.exports = {
   employeeAttendanceByAdmin,
   bulkEmployeeRegister,
   getAllEmployeeAttendance,
-  employeeClockIn,
-  employeeClockOut,
 };

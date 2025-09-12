@@ -12,7 +12,6 @@ const employeeSchema = new mongoose.Schema({
   joiningDate: Date,
   address: String,
   role: { type: String, default: "Employee" },
-  adminID: { type: String, required: true },
   attendance: [
     {
       date: { type: Date, required: true },
@@ -21,12 +20,9 @@ const employeeSchema = new mongoose.Schema({
         enum: ["Present", "Absent", "Work From Home", "Leave"],
         required: true,
       },
-      loginTime: { type: Date },
-      logoutTime: { type: Date },
-      workingHours: { type: Number },
-      whatsappSent: { type: Boolean, default: false },
     },
   ],
+  adminID: { type: String, required: true }, // Add this field
 });
 
 module.exports = mongoose.model("Employee", employeeSchema);

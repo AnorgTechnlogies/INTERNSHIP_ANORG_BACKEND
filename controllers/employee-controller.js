@@ -102,53 +102,77 @@ const employeeClockIn = async (req, res) => {
   try {
     const { employeeId } = req.body;
     if (!employeeId) {
-      return res.status(400).json({ message: "Employee ID is required" });
+      // console.log("DEBUG: Missing employeeId in request body");
+      return res.status(400).json({ message: "Employee ID or email is required" });
     }
 
+    // Get current date and normalize to midnight in UTC to avoid timezone issues
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Start of today
+    today.setUTCHours(0, 0, 0, 0); // Use UTC to ensure consistency
+    const todayStr = today.toISOString().split('T')[0];
+    // console.log(`DEBUG: Current date (today) set to: ${todayStr} (UTC: ${today.toISOString()})`);
 
-    const employee = await Employee.findOne({ employeeId });
+    const employee = await Employee.findOne({
+      $or: [{ employeeId }, { email: employeeId }],
+    });
     if (!employee) {
+      // console.log(`DEBUG: No employee found for employeeId/email: ${employeeId}`);
       return res.status(404).json({ message: "Employee not found" });
     }
 
-    const existingAttendanceIndex = employee.attendance.findIndex(
-      (a) => new Date(a.date).toDateString() === today.toDateString()
-    );
+    // console.log(`DEBUG: Found employee: ${employee.employeeId}, attendance count: ${employee.attendance.length}`);
+
+    // Check for existing attendance record for today
+    const existingAttendanceIndex = employee.attendance.findIndex((a) => {
+      const recordDate = new Date(a.date);
+      recordDate.setUTCHours(0, 0, 0, 0); // Normalize to UTC midnight
+      const recordDateStr = recordDate.toISOString().split('T')[0];
+      // console.log(`DEBUG: Comparing record date: ${recordDateStr} with today: ${todayStr}`);
+      return recordDateStr === todayStr;
+    });
 
     if (existingAttendanceIndex !== -1) {
       const existingRecord = employee.attendance[existingAttendanceIndex];
+      // console.log(`DEBUG: Found existing record for ${todayStr}:`, JSON.stringify(existingRecord, null, 2));
       if (existingRecord.status === "Present" && existingRecord.loginTime) {
-        return res.status(400).json({ 
+        // console.log(`DEBUG: Already clocked in, loginTime: ${existingRecord.loginTime}`);
+        return res.status(400).json({
           message: "Already clocked in for today",
-          loginTime: existingRecord.loginTime
+          loginTime: existingRecord.loginTime,
         });
       }
       if (existingRecord.status === "Absent") {
-        return res.status(400).json({ 
-          message: "Attendance already marked as Absent for today" 
+        // console.log(`DEBUG: Attendance marked as Absent for ${todayStr}`);
+        return res.status(400).json({
+          message: "Attendance already marked as Absent for today",
         });
       }
-      // If status is Leave or Work From Home, or no loginTime, allow clock in (override if needed)
+    } else {
+      console.log(`DEBUG: No attendance record found for ${todayStr}`);
     }
 
     const loginTime = new Date();
+    // console.log(`DEBUG: Setting loginTime to: ${loginTime.toISOString()}`);
 
     const attendanceRecord = {
-      date: today,
+      date: today, // Use normalized UTC date for today
       status: "Present",
       loginTime,
       whatsappSent: false,
     };
+    // console.log(`DEBUG: Creating/Updating attendance record:`, JSON.stringify(attendanceRecord, null, 2));
 
     if (existingAttendanceIndex !== -1) {
+      // console.log(`DEBUG: Updating existing attendance record at index ${existingAttendanceIndex}`);
       employee.attendance[existingAttendanceIndex] = attendanceRecord;
     } else {
+      console.log(`DEBUG: Pushing new attendance record for ${todayStr}`);
       employee.attendance.push(attendanceRecord);
     }
 
     await employee.save();
+    // console.log(`DEBUG: Employee saved, attendance updated for ${todayStr}`);
+
     employee.password = undefined;
 
     res.status(200).json({
@@ -158,10 +182,10 @@ const employeeClockIn = async (req, res) => {
         employeeId: employee.employeeId,
         name: employee.name,
         loginTime: loginTime.toISOString(),
-      }
+      },
     });
   } catch (error) {
-    console.error("Clock in error:", error);
+    console.error(`DEBUG: Clock in error for employeeId ${employeeId}:`, error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -170,13 +194,15 @@ const employeeClockOut = async (req, res) => {
   try {
     const { employeeId } = req.body;
     if (!employeeId) {
-      return res.status(400).json({ message: "Employee ID is required" });
+      return res.status(400).json({ message: "Employee ID or email is required" });
     }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const employee = await Employee.findOne({ employeeId });
+    const employee = await Employee.findOne({
+      $or: [{ employeeId }, { email: employeeId }],
+    });
     if (!employee) {
       return res.status(404).json({ message: "Employee not found" });
     }
@@ -186,22 +212,22 @@ const employeeClockOut = async (req, res) => {
     );
 
     if (existingAttendanceIndex === -1) {
-      return res.status(400).json({ 
-        message: "No attendance record found for today. Please clock in first." 
+      return res.status(400).json({
+        message: "No attendance record found for today. Please clock in first.",
       });
     }
 
     const existingRecord = employee.attendance[existingAttendanceIndex];
     if (existingRecord.status !== "Present") {
-      return res.status(400).json({ 
-        message: `Cannot clock out: Status is ${existingRecord.status}` 
+      return res.status(400).json({
+        message: `Cannot clock out: Status is ${existingRecord.status}`,
       });
     }
 
     if (existingRecord.logoutTime) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: "Already clocked out for today",
-        logoutTime: existingRecord.logoutTime
+        logoutTime: existingRecord.logoutTime,
       });
     }
 
@@ -209,18 +235,17 @@ const employeeClockOut = async (req, res) => {
     const loginTime = existingRecord.loginTime;
 
     if (!loginTime) {
-      return res.status(400).json({ 
-        message: "No login time found. Please clock in first." 
+      return res.status(400).json({
+        message: "No login time found. Please clock in first.",
       });
     }
 
     if (logoutTime <= loginTime) {
-      return res.status(400).json({ 
-        message: "Logout time must be after login time" 
+      return res.status(400).json({
+        message: "Logout time must be after login time",
       });
     }
 
-    // Calculate working hours
     const diffMs = logoutTime - loginTime;
     const workingHours = (diffMs / (1000 * 60 * 60)).toFixed(2);
 
@@ -239,10 +264,91 @@ const employeeClockOut = async (req, res) => {
         loginTime: loginTime.toISOString(),
         logoutTime: logoutTime.toISOString(),
         workingHours: parseFloat(workingHours),
-      }
+      },
     });
   } catch (error) {
     console.error("Clock out error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+const getEmployeeAttendance = async (req, res) => {
+  try {
+    const { employeeId, startDate, endDate } = req.body;
+
+    // Validate input
+    if (!employeeId) {
+      return res.status(400).json({ message: "Employee ID or email is required" });
+    }
+
+    // Find employee by ID or email
+    const employee = await Employee.findOne({
+      $or: [{ employeeId }, { email: employeeId }],
+    }).select("-password"); // Exclude password from response
+
+    if (!employee) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    // Prepare date range filter
+    let dateFilter = {};
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      
+      if (start > end) {
+        return res.status(400).json({ message: "Start date must be before end date" });
+      }
+
+      dateFilter = {
+        date: {
+          $gte: start,
+          $lte: end,
+        },
+      };
+    }
+
+    // Filter attendance records
+    let attendanceRecords = employee.attendance;
+    if (Object.keys(dateFilter).length > 0) {
+      attendanceRecords = employee.attendance.filter((record) => {
+        const recordDate = new Date(record.date);
+        return recordDate >= dateFilter.date.$gte && recordDate <= dateFilter.date.$lte;
+      });
+    }
+
+    // Sort attendance records by date (descending)
+    attendanceRecords.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Prepare response
+    const response = {
+      employee: {
+        _id: employee._id,
+        employeeId: employee.employeeId,
+        name: employee.name,
+        email: employee.email,
+        designation: employee.designation,
+        department: employee.department,
+        joiningDate: employee.joiningDate,
+      },
+      attendance: attendanceRecords.map((record) => ({
+        date: record.date.toISOString().split("T")[0],
+        status: record.status,
+        loginTime: record.loginTime ? record.loginTime.toISOString() : null,
+        logoutTime: record.logoutTime ? record.logoutTime.toISOString() : null,
+        workingHours: record.workingHours || null,
+        whatsappSent: record.whatsappSent,
+      })),
+    };
+
+    res.status(200).json({
+      message: "Attendance records retrieved successfully",
+      data: response,
+    });
+  } catch (error) {
+    console.error("Get attendance error:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
@@ -837,4 +943,5 @@ module.exports = {
   getAllEmployeeAttendance,
   employeeClockIn,
   employeeClockOut,
+  getEmployeeAttendance,
 };

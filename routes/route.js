@@ -73,6 +73,7 @@ const {
   employeeAttendanceByAdmin,
   employeeClockIn,
   employeeClockOut,
+  getEmployeeAttendance,
 } = require("../controllers/employee-controller.js");
 
 // Admin
@@ -85,11 +86,12 @@ router.post("/EmployeeReg", employeeRegister);
 router.post("/EmployeeLogin", employeeLogIn);
 router.get("/Employee/:id", getEmployeeDetail);
 router.get("/Employee/admin/:adminID", getAllEmployeesByAdmin); // New route
-router.post("/bulkEmployeeReg", upload.single("file"), bulkEmployeeRegister);
-router.get("/EmployeeAttendance", getAllEmployeeAttendance);
-router.post("/EmployeeAttendanceByAdmin", employeeAttendanceByAdmin); // New route
+// router.post("/bulkEmployeeReg", upload.single("file"), bulkEmployeeRegister);
+// router.get("/EmployeeAttendance", getAllEmployeeAttendance);
+// router.post("/EmployeeAttendanceByAdmin", employeeAttendanceByAdmin); // New route
 router.post("/employeeClockIn", employeeClockIn);
 router.post("/employeeClockOut", employeeClockOut);
+router.post("/employeeAttendance", getEmployeeAttendance);
 
 // Intern
 router.post("/InternReg", internRegister);
